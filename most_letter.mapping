@@ -1,0 +1,37 @@
+# Russian Letters
+# encoding: utf-8
+# format: upper,lower,code
+
+А,а,a
+Б,б,b
+В,в,v
+Г,г,g
+Д,д,d
+Е,е,ye
+Ё,ё,yo
+Ж,ж,zh
+З,з,zz
+И,и,i
+Й,й,j
+К,к,k
+Л,л,l
+М,м,m
+Н,н,n
+О,о,o
+П,п,p
+Р,р,r
+С,с,ss
+Т,т,tt
+У,у,u
+Ф,ф,f
+Х,х,h
+Ц,ц,ts
+Ч,ч,ch
+Ш,ш,sh
+Щ,щ,x
+Ъ,ъ,w
+Ы,ы,yy
+Ь,ь,q
+Э,э,e
+Ю,ю,yu
+Я,я,ya
