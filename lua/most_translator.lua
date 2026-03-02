@@ -61,66 +61,94 @@ end
 
 local function latin2russian(env, input)
     -- Greedy longest-match translation
-    -- returns candidates, upper_pattern
+    -- returns candidate, upper_pattern
     local result = {}
     local upper_pattern = {}
+    local accent_pattern = {}
     local pos = 1
     local len = #input
     local max_len = env.max_code_len or 0
 
     while pos <= len do
-        local best = nil
-        local best_len = 0
-        local best_is_upper = false
-        local end_pos = math.min(len, pos + max_len - 1)
-        for i = end_pos, pos, -1 do
-            local raw_substr = input:sub(pos, i)
-            local substr = raw_substr:lower()
-            local acc = env.dict[substr]
-            if acc then
-                best = acc
-                local first_char = raw_substr:sub(1, 1)
-                best_is_upper = "A" <= first_char and first_char <= "Z"
-                best_len = #substr
-                break
-            end
-        end
-
-        if best then
-            table.insert(result, best)
-            table.insert(upper_pattern, best_is_upper)
-            pos = pos + best_len
-        else
-            table.insert(result, input:sub(pos, pos))
-            table.insert(upper_pattern, "A" <= input:sub(pos, pos) and input:sub(pos, pos) <= "Z")
+        if input:sub(pos, pos) == "." then
+            table.insert(result, ".")
+            table.insert(upper_pattern, false)
+            table.insert(accent_pattern, false)
             pos = pos + 1
+        else
+            local best = nil
+            local best_len = 0
+            local best_is_upper = false
+            local end_pos = math.min(len, pos + max_len - 1)
+            -- Check if "'" is used
+            for i = pos, end_pos do
+                if input:sub(i, i) == "'" or input:sub(i, i) == "." then
+                    end_pos = i - 1
+                    break
+                end
+            end
+            for i = end_pos, pos, -1 do
+                local raw_substr = input:sub(pos, i)
+                local substr = raw_substr:lower()
+                local acc = env.dict[substr]
+                if acc then
+                    best = acc
+                    local first_char = raw_substr:sub(1, 1)
+                    best_is_upper = "A" <= first_char and first_char <= "Z"
+                    best_len = #substr
+                    break
+                end
+            end
+
+            if best then
+                table.insert(result, best)
+                table.insert(upper_pattern, best_is_upper)
+                pos = pos + best_len
+            else
+                -- Try to double write the current character
+                local char = input:sub(pos, pos)
+                local is_upper = "A" <= char and char <= "Z"
+                local acc = env.dict[char:lower() .. char:lower()]
+                if acc then
+                    table.insert(result, acc)
+                else
+                    table.insert(result, char:lower())
+                end
+                table.insert(upper_pattern, is_upper)
+                pos = pos + 1
+            end
+
+            if pos <= len and input:sub(pos, pos) == "'" then
+                pos = pos + 1
+                table.insert(accent_pattern, true)
+            else
+                table.insert(accent_pattern, false)
+            end
         end
     end
 
-    return { table.concat(result, "") }, upper_pattern
+    return table.concat(result, ""), upper_pattern, accent_pattern
 end
 
-local function apply_upper_pattern(env, str, pattern)
+local function apply_pattern(env, str, upper_pattern, accent_pattern)
     -- use upper_pattern to determine the case of each character in str
     local result = {}
-    local pattern_len = #pattern
+    local upper_pattern_len = #upper_pattern
+    local accent_pattern_len = #accent_pattern
     local i = 1
     for index, cp in utf8.codes(str) do
         local char = utf8.char(cp)
-        if i > pattern_len then
-            table.insert(result, str:sub(index))
-            break
-        end
-        if pattern[i] then
+        local applied_char = char
+        if i <= upper_pattern_len and upper_pattern[i] then
             local upper = env.lower2upper[char]
             if upper then
-                table.insert(result, upper)
-            else
-                table.insert(result, char)
+                applied_char = upper
             end
-        else
-            table.insert(result, char)
         end
+        if i <= accent_pattern_len and accent_pattern[i] then
+            applied_char = applied_char .. "\u{0301}"
+        end
+        table.insert(result, applied_char)
         i = i + 1
     end
     return table.concat(result, "")
@@ -212,7 +240,75 @@ end
 
 local function init(env)
     env.dict, env.prefix_dict, env.max_code_len, env.lower2upper = load_csv_dict()
-    env.russian_dict = Component.Translator(env.engine, "", "table_translator@most_russian")
+    local configured_top_k = env.engine.schema.config:get_int("most/topk")
+    env.top_k = (configured_top_k and configured_top_k > 0) and configured_top_k or 49
+    env.tag_ru_zh_1 = env.engine.schema.config:get_string("most_ru_zh_1/tag") or "most_ru_zh_1_tag"
+    env.tag_ru_zh_2 = env.engine.schema.config:get_string("most_ru_zh_2/tag") or "most_ru_zh_2_tag"
+    env.tag_ru_zh = env.engine.schema.config:get_string("most_ru_zh/tag") or "most_ru_zh_tag"
+    env.tag_ru_zh_full = env.engine.schema.config:get_string("most_ru_zh_full/tag") or "most_ru_zh_full_tag"
+    env.ru_zh_1 = Component.Translator(env.engine, "", "table_translator@most_ru_zh_1")
+    env.ru_zh_2 = Component.Translator(env.engine, "", "table_translator@most_ru_zh_2")
+    env.ru_zh = Component.Translator(env.engine, "", "table_translator@most_ru_zh")
+    env.ru_zh_full = Component.Translator(env.engine, "", "table_translator@most_ru_zh_full")
+end
+
+local function better_candidate(a, b)
+    if a.quality ~= b.quality then
+        return a.quality > b.quality
+    end
+    return a.word < b.word
+end
+
+local function to_word(prefix, cand)
+    local suffix = cand.comment or ""
+    if suffix:sub(1, 1) == "~" then
+        suffix = suffix:sub(2)
+    end
+    return prefix .. suffix
+end
+
+local function collect_from_translator(translator, prefix, tag, merged)
+    if not translator then
+        return 0
+    end
+    local seg = Segment(0, #prefix)
+    seg.tags = Set({tag})
+    local xlation = translator:query(prefix, seg)
+    if not xlation then
+        return 0
+    end
+    local added = 0
+    for cand in xlation:iter() do
+        local word = to_word(prefix, cand)
+        local quality = cand.quality or 0
+        local old = merged[word]
+        if not old then
+            merged[word] = {
+                word = word,
+                cand = cand,
+                quality = quality,
+            }
+            added = added + 1
+        elseif quality > old.quality then
+            old.cand = cand
+            old.quality = quality
+        end
+    end
+    return added
+end
+
+local function sorted_top_k(merged, k)
+    local items = {}
+    for _, item in pairs(merged) do
+        table.insert(items, item)
+    end
+    table.sort(items, better_candidate)
+    if #items > k then
+        for i = #items, k + 1, -1 do
+            items[i] = nil
+        end
+    end
+    return items
 end
 
 local function translator(input, segment, env)
@@ -220,51 +316,60 @@ local function translator(input, segment, env)
         return
     end
 
-    local candidates, upper_pattern = latin2russian(env, input)
-    if #candidates == 1 and env.russian_dict then
-        local prefix = candidates[1]
-        if not prefix:find("%s") then
-            local seg = Segment(0, #prefix)
-            seg.tags = Set({"abc"})
-            local xlation = env.russian_dict:query(prefix, seg)
-            if xlation then
-                local cnt = 0
-                local all_upper = true
-                for _, is_upper in ipairs(upper_pattern) do
-                    if not is_upper then
-                        all_upper = false
-                        break
-                    end
-                end
-                for cand in xlation:iter() do
-                    local word = prefix .. cand.comment:sub(2)
-                    local comment = format_comment(word, cand.text)
-                    cnt = cnt + 1
-                    if cnt == 1 and prefix ~= word then
-                        yield(Candidate("completion", segment.start, segment._end, apply_upper_pattern(env, prefix, upper_pattern), ""))
-                    end
-                    local word_upper_pattern = {}
-                    if all_upper then
-                        for _ in utf8.codes(word) do
-                            table.insert(word_upper_pattern, true)
-                        end
-                    else
-                        word_upper_pattern = upper_pattern
-                    end
-                    yield(Candidate("phrase", segment.start, segment._end, apply_upper_pattern(env, word, word_upper_pattern), comment))
-                    if cnt >= 15 then
-                        break
-                    end
-                end
-                if cnt > 0 then
-                    return
-                end
+    local prefix, upper_pattern, accent_pattern = latin2russian(env, input)
+    if not prefix:find("%s") then
+        local modified_prefix_table = {}
+        for _, cp in utf8.codes(prefix) do
+            if utf8.char(cp) == "." then
+                table.insert(modified_prefix_table, "-")
+            else
+                table.insert(modified_prefix_table, utf8.char(cp))
             end
         end
-    end
+        local modified_prefix = table.concat(modified_prefix_table, "")
+        local merged = {}
+        local prefix_len = utf8.len(modified_prefix) or 0
 
-    for _, cand in ipairs(candidates) do
-        yield(Candidate("completion", segment.start, segment._end, apply_upper_pattern(env, cand, upper_pattern), ""))
+        if prefix_len == 1 then
+            collect_from_translator(env.ru_zh_1, modified_prefix, env.tag_ru_zh_1, merged)
+        elseif prefix_len == 2 then
+            collect_from_translator(env.ru_zh_2, modified_prefix, env.tag_ru_zh_2, merged)
+        else
+            local cnt = collect_from_translator(env.ru_zh, modified_prefix, env.tag_ru_zh, merged)
+            if cnt < env.top_k then
+                collect_from_translator(env.ru_zh_full, modified_prefix, env.tag_ru_zh_full, merged)
+            end
+        end
+
+        local top_items = sorted_top_k(merged, env.top_k)
+        local cnt = #top_items
+        if cnt > 0 then
+            local all_upper = true
+            for _, is_upper in ipairs(upper_pattern) do
+                if not is_upper then
+                    all_upper = false
+                    break
+                end
+            end
+
+            for idx, item in ipairs(top_items) do
+                local word = item.word
+                local comment = format_comment(word, item.cand.text)
+                if idx == 1 and modified_prefix ~= word then
+                    yield(Candidate("completion", segment.start, segment._end, apply_pattern(env, prefix, upper_pattern, accent_pattern), ""))
+                end
+                local word_upper_pattern = {}
+                if all_upper then
+                    for _ in utf8.codes(word) do
+                        table.insert(word_upper_pattern, true)
+                    end
+                else
+                    word_upper_pattern = upper_pattern
+                end
+                yield(Candidate("phrase", segment.start, segment._end, apply_pattern(env, word, word_upper_pattern, accent_pattern), comment))
+            end
+            return
+        end
     end
 end
 

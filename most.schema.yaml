@@ -4,11 +4,19 @@ schema:
   version: "20260226"
   author:
     - suif4599
-  description: |
-    俄语前缀码输入方案
+  description: 俄语前缀码输入方案
+  dependencies:
+    - most_ru_zh_1
+    - most_ru_zh_2
+    - most_ru_zh
+    - most_ru_zh_full
+
+most:
+  topk: 49
 
 engine:
   processors:
+    - lua_processor@*switch_processor
     - ascii_composer
     - recognizer
     - key_binder
@@ -22,21 +30,49 @@ engine:
     - punct_segmentor
     - fallback_segmentor
   translators:
+    - table_translator@most_ru_zh_1
+    - table_translator@most_ru_zh_2
+    - table_translator@most_ru_zh
+    - table_translator@most_ru_zh_full
     - lua_translator@*most_translator
     - punct_translator
   filters:
     - uniquifier
 
 speller:
-  alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-.'"
-  delimiter: " '"
+  alphabet: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.'"
 
-translator:
-  dictionary: most_russian
-
-most_russian:
-  dictionary: most_russian
+most_ru_zh_1:
+  tag: most_ru_zh_1_tag
+  dictionary: most_ru_zh_1
   enable_completion: true
   enable_sentence: false
   enable_encoder: false
   enable_user_dict: false
+
+most_ru_zh_2:
+  tag: most_ru_zh_2_tag
+  dictionary: most_ru_zh_2
+  enable_completion: true
+  enable_sentence: false
+  enable_encoder: false
+  enable_user_dict: false
+
+most_ru_zh:
+  tag: most_ru_zh_tag
+  dictionary: most_ru_zh
+  enable_completion: true
+  enable_sentence: false
+  enable_encoder: false
+  enable_user_dict: false
+
+most_ru_zh_full:
+  tag: most_ru_zh_full_tag
+  dictionary: most_ru_zh_full
+  enable_completion: true
+  enable_sentence: false
+  enable_encoder: false
+  enable_user_dict: false
+
+key_binder:
+  import_preset: default
