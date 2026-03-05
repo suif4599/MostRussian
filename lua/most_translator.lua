@@ -242,6 +242,8 @@ local function init(env)
     env.dict, env.prefix_dict, env.max_code_len, env.lower2upper = load_csv_dict()
     local configured_top_k = env.engine.schema.config:get_int("most/topk")
     env.top_k = (configured_top_k and configured_top_k > 0) and configured_top_k or 49
+    env.auto_commit_word = env.engine.schema.config:get_bool("most/auto_commit_word")
+    env.auto_commit_letter = env.engine.schema.config:get_bool("most/auto_commit_letter")
     env.tag_ru_zh_1 = env.engine.schema.config:get_string("most_ru_zh_1/tag") or "most_ru_zh_1_tag"
     env.tag_ru_zh_2 = env.engine.schema.config:get_string("most_ru_zh_2/tag") or "most_ru_zh_2_tag"
     env.tag_ru_zh = env.engine.schema.config:get_string("most_ru_zh/tag") or "most_ru_zh_tag"
@@ -316,6 +318,46 @@ local function translator(input, segment, env)
         return
     end
 
+    local letter_mode = env.engine.context:get_option("letter_mode")
+    if letter_mode then
+        local char = input:sub(1, 1)
+        local is_upper = "A" <= char and char <= "Z"
+        local acc = env.dict[input:lower()]
+        if acc then
+            local cand = apply_pattern(env, acc, {is_upper}, {})
+            if env.auto_commit_letter then
+                env.engine:commit_text(cand)
+                env.engine.context:clear()
+            else
+                yield(Candidate("completion", segment.start, segment._end, cand, ""))
+            end
+            return
+        end
+        local prefix_acc = env.prefix_dict[input:lower()]
+        if prefix_acc then
+            if #prefix_acc == 1 and env.auto_commit_letter then
+                local cand = apply_pattern(env, prefix_acc[1], {is_upper}, {})
+                env.engine:commit_text(cand)
+                env.engine.context:clear()
+                return
+            end
+            for _, acc in ipairs(prefix_acc) do
+                local cand = apply_pattern(env, acc, {is_upper}, {})
+                yield(Candidate("completion", segment.start, segment._end, cand, ""))
+            end
+            return
+        end
+        yield(Candidate("completion", segment.start, segment._end, input, ""))
+        return
+    end
+
+    if input:lower() == "no" then
+        yield(Candidate("punctuation", segment.start, segment._end, "№", ""))
+    elseif input:lower() == "..." then
+        yield(Candidate("punctuation", segment.start, segment._end, "…", ""))
+        return
+    end
+
     local prefix, upper_pattern, accent_pattern = latin2russian(env, input)
     if not prefix:find("%s") then
         local modified_prefix_table = {}
@@ -355,6 +397,22 @@ local function translator(input, segment, env)
                 break
             end
         end
+
+        if cnt == 1 and env.auto_commit_word then
+            local word = top_items[1].word
+            local word_upper_pattern = {}
+            if all_upper then
+                for _ in utf8.codes(word) do
+                    table.insert(word_upper_pattern, true)
+                end
+            else
+                word_upper_pattern = upper_pattern
+            end
+            env.engine:commit_text(apply_pattern(env, word, word_upper_pattern, accent_pattern))
+            env.engine.context:clear()
+            return
+        end
+
         for idx, item in ipairs(top_items) do
             local word = item.word
             local comment = format_comment(word, item.cand.text)

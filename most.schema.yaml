@@ -13,10 +13,20 @@ schema:
 
 most:
   topk: 49
+  auto_commit_word: false
+  auto_commit_letter: true
+  # reserved_word: "sch"
+
+switches:
+  - name: punctuation
+    states: ["<>", "«»"]
+  - name: letter_mode
+    states: ["单词", "字母"]
 
 engine:
   processors:
     # - lua_processor@*switch_processor
+    - lua_processor@*most_punctuation_processor
     - ascii_composer
     - recognizer
     - key_binder
