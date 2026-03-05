@@ -343,32 +343,33 @@ local function translator(input, segment, env)
 
         local top_items = sorted_top_k(merged, env.top_k)
         local cnt = #top_items
-        if cnt > 0 then
-            local all_upper = true
-            for _, is_upper in ipairs(upper_pattern) do
-                if not is_upper then
-                    all_upper = false
-                    break
-                end
-            end
-
-            for idx, item in ipairs(top_items) do
-                local word = item.word
-                local comment = format_comment(word, item.cand.text)
-                if idx == 1 and modified_prefix ~= word then
-                    yield(Candidate("completion", segment.start, segment._end, apply_pattern(env, prefix, upper_pattern, accent_pattern), ""))
-                end
-                local word_upper_pattern = {}
-                if all_upper then
-                    for _ in utf8.codes(word) do
-                        table.insert(word_upper_pattern, true)
-                    end
-                else
-                    word_upper_pattern = upper_pattern
-                end
-                yield(Candidate("phrase", segment.start, segment._end, apply_pattern(env, word, word_upper_pattern, accent_pattern), comment))
-            end
+        if cnt == 0 then
+            yield(Candidate("completion", segment.start, segment._end, apply_pattern(env, prefix, upper_pattern, accent_pattern), ""))
             return
+        end
+
+        local all_upper = true
+        for _, is_upper in ipairs(upper_pattern) do
+            if not is_upper then
+                all_upper = false
+                break
+            end
+        end
+        for idx, item in ipairs(top_items) do
+            local word = item.word
+            local comment = format_comment(word, item.cand.text)
+            if idx == 1 and modified_prefix ~= word then
+                yield(Candidate("completion", segment.start, segment._end, apply_pattern(env, prefix, upper_pattern, accent_pattern), ""))
+            end
+            local word_upper_pattern = {}
+            if all_upper then
+                for _ in utf8.codes(word) do
+                    table.insert(word_upper_pattern, true)
+                end
+            else
+                word_upper_pattern = upper_pattern
+            end
+            yield(Candidate("phrase", segment.start, segment._end, apply_pattern(env, word, word_upper_pattern, accent_pattern), comment))
         end
     end
 end

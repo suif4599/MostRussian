@@ -16,7 +16,7 @@ most:
 
 engine:
   processors:
-    - lua_processor@*switch_processor
+    # - lua_processor@*switch_processor
     - ascii_composer
     - recognizer
     - key_binder
